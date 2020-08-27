@@ -6,57 +6,127 @@
 #include<errno.h>
 #include<sys/wait.h>
 #include<sys/stat.h>
+#include<dirent.h>
 
 #define MAX_INPUT_SIZE 1024
 #define MAX_PATH_SIZE 1024
 #define MAX_TOKEN_SIZE 64
 #define MAX_NUM_TOKENS 64
 #define flush() while(getchar()!='\n');
-struct lineinfo{
 
+void printError(){
+  printf("Error: %s\n", strerror(errno));
 }
-struct cmdinfo{
-  int background;
-  int n_tokens;
-  int isInternal;
-};
+void executeBuiltin(char* cmd, char** args){
+  if(!strcmp(cmd,"exit")){
+    printf("Closing the shell..\n");
+    printf("Bye! %s\n", getenv("USER"));
+    exit(0);
+  }
+  else if(!strcmp(cmd,"pwd")){
+    char cwd[MAX_PATH_SIZE];
+    if(getcwd(cwd, sizeof(cwd))!=NULL){
+      printf("%s\n",cwd);
+    }
+    else{
+      printError();
+    }
+  }
+  else if(!strcmp(cmd, "ls")){
+    struct dirent *de;
+    DIR *dr = opendir(".");
 
-struct cmdinfo* init_cmd_info(struct cmdinfo* cmd){
-  cmd = (struct cmdinfo*)malloc(sizeof(struct cmdinfo));
-  cmd->background = 0;
-  cmd->n_tokens = 0;
-  cmd->isInternal = 0;
-  return cmd;
+    if (dr == NULL)
+    {
+        printf("Could not open current directory" );
+    }
+    while ((de = readdir(dr)) != NULL)
+            printf("%s\n", de->d_name);
+    closedir(dr);
+  }
+  else if(!strcmp(cmd, "cd")){
+    if(chdir(args[1])){
+      printError();
+    }
+  }
+  else if(!strcmp(cmd,"history")){
+    printf("exexuted\n");
+    FILE* fp = fopen("history.txt", "r+");
+    char c = fgetc(fp);
+    while (c != EOF)
+    {
+        printf ("%c", c);
+        c = fgetc(fp);
+    }
+    fclose(fp);
+  }
+  else if(!strcmp(cmd,"mkdir")){
+    if(mkdir(args[1], 700)){
+      printError();
+    }
+    else{
+        printf("Directory created :) \n");
+    }
+  }
+  else if(!strcmp(cmd, "echo")){
+    int count = 1;
+    while(args[count]!=NULL){
+      printf("%s ",args[count]);
+      count++;
+    }
+    printf("\n");
+  }
+  else if(!strcmp(cmd, "rmdir")){
+    if(rmdir(args[1])){
+      printError();
+    }
+    else{
+      printf("Removed directory %s\n", args[1]);
+    }
+  }
+  else if(!strcmp(cmd, "kill")){
+    int stat;
+    kill ((pid_t)atoi(args[1]),SIGUSR1);
+    wait(&stat);
+  }
 }
 
-void printenv(char* env){
+int isBuiltinCmd(char* cmd){
+  if(!(strcmp(cmd,"exit")&&strcmp(cmd, "ls")&&strcmp(cmd, "pwd")&&strcmp(cmd, "cd")&&strcmp(cmd, "echo")&&strcmp(cmd, "mkdir")&&strcmp(cmd, "history")&&strcmp(cmd, "rmdir")&&strcmp(cmd, "kill"))){
+    return 1;
+  }
+  return 0;
+}
+int printenv(char* env){
   char* line = getenv(env);
   if(line){
     printf("%s: %s\n", env, line);
+    return 1;
   }
   else{
-    return;
+    return 0;
   }
 }
 void printPrompt(){
   char cwd[MAX_PATH_SIZE];
   if(getcwd(cwd, sizeof(cwd))!=NULL){
-    printf("%s:~$ ", cwd);
+    printf("%s@%s:~$ ", getenv("USER")?getenv("USER"):"", cwd);
   }
   else{
     printf("Error: %s\n",strerror(errno));
   }
 }
 
-int tokenise(char* line, char* delimiter, char** tokens){
+int tokenise(char* line, char* delimiter, char** tokens, int* n_cmd, int* background){
   int n_tokens = 0;
-  int pipes = 0;
+  *n_cmd = 1;
   char* token = strtok(line, delimiter);
   while(token!= NULL){
-    if(!strcmp(token, "|")) pipes++;
-    tokens[n_tokens] = token;
-    token = strtok(NULL, delimiter);
-    n_tokens++;
+    if(!strcmp(token, "|")) (*n_cmd)++;
+    if(!strcmp(token,"&")){ *background = 1;}
+      tokens[n_tokens] = token;
+      token = strtok(NULL, delimiter);
+      n_tokens++;
   }
   return n_tokens;
 }
@@ -67,24 +137,48 @@ void historycmd(char* line){
   fclose(fp);
 }
 
-void readLine(char* line){
+int readLine(char* line){
+  int success = 0;
   scanf("%[^\n]", line);
   line[strlen(line)] = '\0';
-  historycmd(line);
+  if(success = strlen(line)) historycmd(line);
   flush();
+  return success;
 }
 
-void parseCmd(char** tokens, int n_tokens){
-  for(int i = 0;i<n_tokens;i++){
-    if(!strcmp(tokens[i],"|"))
+int parseCmd(char** tokens, int n_tokens, int n_cmd, int background){
+  pid_t child = 0;
+  int cmd_exec = 0;
+  if(isBuiltinCmd(tokens[0])){
+    executeBuiltin(tokens[0], tokens);
+    cmd_exec = 1;
+  }
+  else if(printenv(tokens[0])){
+    cmd_exec = 1;
+  }
+  else if(n_cmd<2){
+    child = fork();
+    if(child < 0){
+      printError();
+    }
+    else if(!child) {
+      if (execvp(tokens[0],tokens) < 0) {
+        return 0;
+      }
+      exit(0);
+    }
+    else{
+      if(!background)
+      waitpid(child, NULL, 0);
+    }
   }
 }
 
+
 int main(int argc, char** argv){
   char line[MAX_INPUT_SIZE];
-  int n_tokens = 0;
-  char* tokens[MAX_TOKEN_SIZE];
-  struct cmdinfo** cmd = NULL;
+
+
   FILE* fp;
   if(argc == 2){
     fp = fopen(argv[1],"r");
@@ -102,10 +196,17 @@ int main(int argc, char** argv){
       line[strlen(line)-1] = '\0';
     }
     else{
+
+      int n_tokens = 0, n_cmd=0, background = 0;
       printPrompt();
-      readLine(line);
-      n_tokens = tokenise(line, " ", tokens)+1;
-      parseCmd(tokens, n_tokens);
+      if(readLine(line)){
+        char* tokens[MAX_TOKEN_SIZE];
+        n_tokens = tokenise(line, " ", tokens,&n_cmd, &background)+1;
+        if(strcmp(tokens[n_tokens-2],"&") == 0){
+          tokens[n_tokens-2] = NULL;
+        }
+        parseCmd(tokens, n_tokens, n_cmd, background);
+      }
     }
   }
   fclose(fp);
