@@ -1,0 +1,10 @@
+clear
+echo "Hello World"
+ls
+pwd
+USER
+hostname
+date
+date --help
+ls
+exit
